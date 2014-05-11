@@ -20,10 +20,12 @@ import static com.android.internal.telephony.RILConstants.*;
 
 import android.content.Context;
 import android.os.AsyncResult;
+import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Parcel;
+import android.os.Registrant;
 import android.text.TextUtils;
 import android.telephony.Rlog;
 
@@ -117,6 +119,8 @@ public class SamsungExynos4RIL extends RIL implements CommandsInterface {
     static final int RIL_UNSOL_UTS_GET_UNREAD_SMS_STATUS = 11031;
     static final int RIL_UNSOL_MIP_CONNECT_STATUS = 11032;
 
+    private Object mCatProCmdBuffer;
+
     public SamsungExynos4RIL(Context context, int networkMode, int cdmaSubscription) {
         super(context, networkMode, cdmaSubscription);
     }
@@ -164,7 +168,7 @@ public class SamsungExynos4RIL extends RIL implements CommandsInterface {
             case RIL_REQUEST_ENTER_SIM_PUK2: ret =  responseInts(p); break;
             case RIL_REQUEST_CHANGE_SIM_PIN: ret =  responseInts(p); break;
             case RIL_REQUEST_CHANGE_SIM_PIN2: ret =  responseInts(p); break;
-            case RIL_REQUEST_ENTER_DEPERSONALIZATION_CODE: ret =  responseInts(p); break;
+            case RIL_REQUEST_ENTER_NETWORK_DEPERSONALIZATION: ret =  responseInts(p); break;
             case RIL_REQUEST_GET_CURRENT_CALLS: ret =  responseCallList(p); break;
             case RIL_REQUEST_DIAL: ret =  responseVoid(p); break;
             case RIL_REQUEST_DIAL_EMERGENCY: ret =  responseVoid(p); break;
@@ -382,4 +386,48 @@ public class SamsungExynos4RIL extends RIL implements CommandsInterface {
 
         send(rr);
     }
+
+    @Override
+    protected void
+    processUnsolicited (Parcel p) {
+        int dataPosition = p.dataPosition();
+        int response = p.readInt();
+
+        switch(response) {
+            case RIL_UNSOL_STK_PROACTIVE_COMMAND: 
+                Object ret = responseString(p);
+                if (RILJ_LOGD) unsljLogRet(response, ret);
+
+                if (mCatProCmdRegistrant != null) {
+                    mCatProCmdRegistrant.notifyRegistrant(
+                            new AsyncResult (null, ret, null));
+                } else {
+                    // The RIL will send a CAT proactive command before the
+                    // registrant is registered. Buffer it to make sure it
+                    // does not get ignored (and breaks CatService).
+                    mCatProCmdBuffer = ret;
+                }
+                break;
+
+            default:
+                // Rewind the Parcel
+                p.setDataPosition(dataPosition);
+
+                // Forward responses that we are not overriding to the super class
+                super.processUnsolicited(p);
+                return;
+        }
+
+    }
+
+    @Override
+    public void setOnCatProactiveCmd(Handler h, int what, Object obj) {
+        mCatProCmdRegistrant = new Registrant (h, what, obj);
+        if (mCatProCmdBuffer != null) {
+            mCatProCmdRegistrant.notifyRegistrant(
+                                new AsyncResult (null, mCatProCmdBuffer, null));
+            mCatProCmdBuffer = null;
+        }
+    }
+
 }
